@@ -51,14 +51,7 @@ func logDebug(format string, args ...interface{}) {
 	}
 }
 
-// File represents the structure of a file entry in files.xml
-type File struct {
-	ID          string `xml:"id,attr"`
-	ContentHash string `xml:"contenthash"`
-	Filename    string `xml:"filename"`
-	Folder      string `xml:"-"` // Ignore Folder when XML parsing
-}
-
+// forbidden is a regular expression that matches invalid characters for file names.
 var forbidden = regexp.MustCompile(`[<>:"/\\|?*\x00-\x1F]+`)
 
 // sanitizeFileName replaces invalid characters in folder names with a hyphen.
@@ -67,25 +60,45 @@ func sanitizeFileName(fileName string) string {
 	return forbidden.ReplaceAllString(fileName, "")
 }
 
+// File represents the structure of a file entry in files.xml
+type File struct {
+	ID          string `xml:"id,attr"`
+	ContentHash string `xml:"contenthash"`
+	Filename    string `xml:"filename"`
+	Folder      string `xml:"-"` // Ignore Folder when XML parsing
+}
+
 // parseXMLFile reads XML data from an io.Reader and unmarshals it into the provided struct.
 // It returns an error if the data cannot be read or parsed.
-func parseXMLFile(reader io.Reader, v interface{}) error {
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return err
-	}
-	return xml.Unmarshal(data, v)
+func parseXMLFile(reader io.Reader, v any) error {
+	decoder := xml.NewDecoder(reader)
+	return decoder.Decode(v)
 }
 
 // buildFileMapping reads the files.xml file and builds a mapping of file IDs to File structs.
 // It returns a map where the keys are file IDs and the values are File structs.
+// The files.xml structure is like this:
+// ```xml
+// <files>
+//
+//	<file id="70829635">
+//		<contenthash>da39a3ee5e6b4b0d3255bfef95601890afd80709</contenthash>
+//		<filename>empty.txt</filename>
+//		...
+//	</file>
+//	...
+//
+// </files>
+// ```
 func buildFileMapping(source fs.FS, filesXMLPath string) (map[string]File, error) {
+	// Open the files.xml file
 	file, err := source.Open(filesXMLPath)
 	if err != nil {
 		return nil, fmt.Errorf("error reading files.xml: %w", err)
 	}
 	defer file.Close()
 
+	// Parse the XML file
 	var files struct {
 		Files []File `xml:"file"`
 	}
@@ -93,15 +106,19 @@ func buildFileMapping(source fs.FS, filesXMLPath string) (map[string]File, error
 		return nil, fmt.Errorf("error parsing files.xml: %w", err)
 	}
 
+	// Create a mapping of file IDs to File structs
 	fileMapping := make(map[string]File)
 	for _, file := range files.Files {
 		file.Filename = sanitizeFileName(file.Filename)
+		// Skip files with empty ID, ContentHash, or useless filename
 		if file.ID == "" || file.ContentHash == "" || file.Filename == "." {
 			continue
 		}
 		fileMapping[file.ID] = file
 		logDebug("Added file to mapping: ID=%s, ContentHash=%s, Filename=%s\n", file.ID, file.ContentHash, file.Filename)
 	}
+
+	// Done
 	return fileMapping, nil
 }
 
@@ -109,59 +126,69 @@ func buildFileMapping(source fs.FS, filesXMLPath string) (map[string]File, error
 // with folder names. It reads folder.xml and inforef.xml files to extract folder names
 // and associates them with file IDs.
 func processActivitiesFolder(source fs.FS, activitiesFolder string, fileMapping map[string]File) error {
+	// Read the activities folder
 	dirs, err := fs.ReadDir(source, activitiesFolder)
 	if err != nil {
 		return fmt.Errorf("error reading activities folder: %w", err)
 	}
 
+	// Loop through the directories in the activities folder
 	for _, dir := range dirs {
-		if strings.HasPrefix(dir.Name(), "folder_") {
-			folderPath := path.Join(activitiesFolder, dir.Name())
+		// Look only inside folders starting with "folder_"
+		if !strings.HasPrefix(dir.Name(), "folder_") {
+			continue
+		}
+		// Construct the path to the folder_XXXX directory
+		folderPath := path.Join(activitiesFolder, dir.Name())
 
-			folderXMLPath := path.Join(folderPath, "folder.xml")
-			folderFile, err := source.Open(folderXMLPath)
-			if err != nil {
-				fmt.Printf("Warning: folder.xml not found in %s\n", folderPath)
-				continue
-			}
-			defer folderFile.Close()
+		// Open the folder.xml file
+		folderXMLPath := path.Join(folderPath, "folder.xml")
+		folderFile, err := source.Open(folderXMLPath)
+		if err != nil {
+			fmt.Printf("Warning: folder.xml not found in %s\n", folderPath)
+			continue
+		}
+		defer folderFile.Close()
 
-			var folderData struct {
-				FolderName string `xml:"folder>name"`
-			}
-			if err := parseXMLFile(folderFile, &folderData); err != nil {
-				fmt.Printf("Error parsing folder.xml: %v\n", err)
-				continue
-			}
+		// Parse the folder.xml file to get the folder name
+		var folderData struct {
+			FolderName string `xml:"folder>name"`
+		}
+		if err := parseXMLFile(folderFile, &folderData); err != nil {
+			fmt.Printf("Error parsing folder.xml: %v\n", err)
+			continue
+		}
+		folderName := sanitizeFileName(folderData.FolderName)
 
-			folderName := sanitizeFileName(folderData.FolderName)
+		// Open the inforef.xml file
+		inforefXMLPath := path.Join(folderPath, "inforef.xml")
+		inforefFile, err := source.Open(inforefXMLPath)
+		if err != nil {
+			fmt.Printf("Warning: inforef.xml not found in %s\n", folderPath)
+			continue
+		}
+		defer inforefFile.Close()
 
-			inforefXMLPath := path.Join(folderPath, "inforef.xml")
-			inforefFile, err := source.Open(inforefXMLPath)
-			if err != nil {
-				fmt.Printf("Warning: inforef.xml not found in %s\n", folderPath)
-				continue
-			}
-			defer inforefFile.Close()
+		// Parse the inforef.xml file to get the file references
+		var inforefData struct {
+			Files []struct {
+				ID string `xml:"id"`
+			} `xml:"fileref>file"`
+		}
+		if err := parseXMLFile(inforefFile, &inforefData); err != nil {
+			fmt.Printf("Error parsing inforef.xml: %v\n", err)
+			continue
+		}
 
-			var inforefData struct {
-				Files []struct {
-					ID string `xml:"id"`
-				} `xml:"fileref>file"`
-			}
-			if err := parseXMLFile(inforefFile, &inforefData); err != nil {
-				fmt.Printf("Error parsing inforef.xml: %v\n", err)
-				continue
-			}
-
-			for _, fileref := range inforefData.Files {
-				if file, exists := fileMapping[fileref.ID]; exists {
-					file.Folder = folderName
-					fileMapping[fileref.ID] = file
-					logDebug("Assigned folder to file: ID=%s, Folder=%s\n", fileref.ID, folderName)
-				} else {
-					logDebug("Warning: File ID %s not found in file_mapping\n", fileref.ID)
-				}
+		// Loop through the file references and assign the folder name
+		// to the corresponding files in the file mapping
+		for _, fileref := range inforefData.Files {
+			if file, exists := fileMapping[fileref.ID]; exists {
+				file.Folder = folderName
+				fileMapping[fileref.ID] = file
+				logDebug("Assigned folder to file: ID=%s, Folder=%s\n", fileref.ID, folderName)
+			} else {
+				logDebug("Warning: File ID %s not found in file_mapping\n", fileref.ID)
 			}
 		}
 	}
@@ -171,8 +198,12 @@ func processActivitiesFolder(source fs.FS, activitiesFolder string, fileMapping 
 // copyFiles copies files from the source to the destination folder based on the file mapping.
 // the file with hash xyz... is in files/xy/xyz...
 func copyFiles(source fs.FS, destinationFolder string, fileMapping map[string]File) int {
+	// Number of copied files
 	var copiedFiles int
+
+	// Loop through the file mapping and copy each file
 	for _, file := range fileMapping {
+		// fht file with hash xyz... has path files/xy/xyz...
 		if len(file.ContentHash) < 2 {
 			fmt.Printf("Warning: Invalid ContentHash for file ID %s\n", file.ID)
 			continue
@@ -188,7 +219,7 @@ func copyFiles(source fs.FS, destinationFolder string, fileMapping map[string]Fi
 		}
 		defer sourceFile.Close()
 
-		// Construct the destination path
+		// Construct the destination path based on if the file is in a folder or not
 		var destinationPath string
 		if file.Folder == "" {
 			destinationPath = filepath.Join(destinationFolder, file.Filename)
@@ -232,14 +263,17 @@ func copyFiles(source fs.FS, destinationFolder string, fileMapping map[string]Fi
 			continue
 		}
 
+		// One more file copied
 		copiedFiles++
 		fmt.Printf("Create: %s\n", destinationPath)
 	}
 	return copiedFiles
 }
 
+// closefn is a function type used to return a function that closes resources.
 type closefn func() error
 
+// targzFS creates a tar filesystem from a .tar.gz file.
 func targzFS(zipPath string) (fs.FS, closefn, error) {
 	// Open the .tar.gz file
 	file, err := os.Open(zipPath)
@@ -262,6 +296,7 @@ func targzFS(zipPath string) (fs.FS, closefn, error) {
 		return nil, nil, err
 	}
 
+	// Define the close function to return
 	close := func() error {
 		errgz := gzReader.Close()
 		errf := file.Close()
@@ -272,6 +307,7 @@ func targzFS(zipPath string) (fs.FS, closefn, error) {
 	return tarFs, close, nil
 }
 
+// dirFS creates a filesystem interface for the specified directory.
 func dirFS(dirPath string) (fs.FS, closefn, error) {
 	// Use os.DirFS to create a filesystem interface for the directory
 	dirFs := os.DirFS(dirPath)
@@ -282,7 +318,7 @@ func dirFS(dirPath string) (fs.FS, closefn, error) {
 // getSource returns the source filesystem based on the provided path.
 // It checks if the path is a directory or a tar.gz file and returns the appropriate fs.FS.
 func getSource(sourcePath string) (fs.FS, closefn, error) {
-
+	// Check if the source path exists
 	info, err := os.Stat(sourcePath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error checking source path: %w", err)
