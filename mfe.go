@@ -17,13 +17,16 @@ import (
 	"github.com/spf13/pflag"
 )
 
-var debug = pflag.BoolP("debug", "d", false, "Enable debug mode")
+var (
+	version = "dev"
+	debug   = pflag.BoolP("debug", "d", false, "Enable debug mode")
+)
 
 func getArguments() (string, string) {
 	// Define command-line flags
 	pflag.Usage = func() {
 		fmt.Println("Usage: mfe <source> <destination_folder>")
-		fmt.Println("Moodle File Extractor: extract all files from a .mbz Moodle backup file.")
+		fmt.Printf("Moodle File Extractor (%s): extract all files from a .mbz Moodle backup file.\n", version)
 		fmt.Println("Options:")
 		fmt.Println("  <source>             Path to .mbz file or extracted folder")
 		fmt.Println("  <destination_folder> Path to destination folder")
