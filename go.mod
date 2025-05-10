@@ -1,4 +1,4 @@
-module github.com/ktzanev/moodle-file-extract
+module github.com/ktzanev/mfe
 
 go 1.24.1
 
