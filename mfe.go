@@ -205,11 +205,11 @@ func copyFiles(source fs.FS, destinationFolder string, fileMapping map[string]Fi
 		destinationDir := filepath.Dir(destinationPath)
 		if _, err := os.Stat(destinationDir); os.IsNotExist(err) {
 			// Create the directory if it doesn't exist
-			fmt.Printf("Creating directory %s\n", destinationDir)
 			if err := os.MkdirAll(destinationDir, os.ModePerm); err != nil {
 				fmt.Printf("Error creating directory %s: %v\n", destinationDir, err)
 				continue
 			}
+			fmt.Printf("Create: %s\n", destinationDir)
 		} else if err != nil {
 			fmt.Printf("Error checking directory %s: %v\n", destinationDir, err)
 			continue
