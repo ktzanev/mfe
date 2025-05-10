@@ -33,24 +33,28 @@ go install github.com/ktzanev/mfe@latest
 
 ## How it Works
 The .mbz file is a .tar.gz archive with the following structure:
+
 ```
-scales.xml
-activities
-course
-files
-sections
-.ARCHIVE_INDEX
-completion.xml
-files.xml
-grade_history.xml
-gradebook.xml
-groups.xml
-moodle_backup.log
-moodle_backup.xml
-outcomes.xml
-questions.xml
-roles.xml
+folders :
+  activities
+  course
+  files
+  sections
+files : 
+  .ARCHIVE_INDEX
+  completion.xml
+  files.xml
+  grade_history.xml
+  gradebook.xml
+  groups.xml
+  moodle_backup.log
+  moodle_backup.xml
+  outcomes.xml
+  questions.xml
+  roles.xml
+  scales.xml
 ```
+
 1. The tool reads the `files.xml` file to map file IDs to their respective files. 
 2. For all folders in `activities` folder that has a name starting with `folder_`, it processes the `folder.xml` and `inforef.xml` files to get the folder structure.
 3. It then copies the files that are in the `files` folder to the destination folder, maintaining the folder structure.
