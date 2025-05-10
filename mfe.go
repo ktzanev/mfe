@@ -14,7 +14,39 @@ import (
 	"strings"
 
 	"github.com/nlepage/go-tarfs"
+	"github.com/spf13/pflag"
 )
+
+var debug = pflag.BoolP("debug", "d", false, "Enable debug mode")
+
+func getArguments() (string, string) {
+	// Define command-line flags
+	pflag.Usage = func() {
+		fmt.Println("Usage: mfe <source> <destination_folder>")
+		fmt.Println("Moodle File Extractor: extract all files from a .mbz Moodle backup file.")
+		fmt.Println("Options:")
+		fmt.Println("  <source>             Path to .mbz file or extracted folder")
+		fmt.Println("  <destination_folder> Path to destination folder")
+		pflag.PrintDefaults()
+	}
+
+	// Parse command-line flags
+	pflag.Parse()
+
+	// Get the arguments
+	args := pflag.Args()
+	if len(args) != 2 {
+		pflag.Usage()
+		os.Exit(1)
+	}
+	return args[0], args[1]
+}
+
+func logDebug(format string, args ...interface{}) {
+	if *debug {
+		fmt.Printf(format, args...)
+	}
+}
 
 // File represents the structure of a file entry in files.xml
 type File struct {
@@ -65,7 +97,7 @@ func buildFileMapping(source fs.FS, filesXMLPath string) (map[string]File, error
 			continue
 		}
 		fileMapping[file.ID] = file
-		fmt.Printf("Added file to mapping: ID=%s, ContentHash=%s, Filename=%s\n", file.ID, file.ContentHash, file.Filename)
+		logDebug("Added file to mapping: ID=%s, ContentHash=%s, Filename=%s\n", file.ID, file.ContentHash, file.Filename)
 	}
 	return fileMapping, nil
 }
@@ -123,9 +155,9 @@ func processActivitiesFolder(source fs.FS, activitiesFolder string, fileMapping 
 				if file, exists := fileMapping[fileref.ID]; exists {
 					file.Folder = folderName
 					fileMapping[fileref.ID] = file
-					fmt.Printf("Assigned folder to file: ID=%s, Folder=%s\n", fileref.ID, folderName)
+					logDebug("Assigned folder to file: ID=%s, Folder=%s\n", fileref.ID, folderName)
 				} else {
-					fmt.Printf("Warning: File ID %s not found in file_mapping\n", fileref.ID)
+					logDebug("Warning: File ID %s not found in file_mapping\n", fileref.ID)
 				}
 			}
 		}
@@ -135,7 +167,8 @@ func processActivitiesFolder(source fs.FS, activitiesFolder string, fileMapping 
 
 // copyFiles copies files from the source to the destination folder based on the file mapping.
 // the file with hash xyz... is in files/xy/xyz...
-func copyFiles(source fs.FS, destinationFolder string, fileMapping map[string]File) {
+func copyFiles(source fs.FS, destinationFolder string, fileMapping map[string]File) int {
+	var copiedFiles int
 	for _, file := range fileMapping {
 		if len(file.ContentHash) < 2 {
 			fmt.Printf("Warning: Invalid ContentHash for file ID %s\n", file.ID)
@@ -161,7 +194,7 @@ func copyFiles(source fs.FS, destinationFolder string, fileMapping map[string]Fi
 		}
 		// Check if the destination file already exists
 		if _, err := os.Stat(destinationPath); err == nil {
-			fmt.Printf("Warning: File %s already exists, skipping\n", destinationPath)
+			fmt.Printf("Skip (already exists): %s\n", destinationPath)
 			continue
 		} else if !os.IsNotExist(err) {
 			fmt.Printf("Error checking file %s: %v\n", destinationPath, err)
@@ -196,8 +229,10 @@ func copyFiles(source fs.FS, destinationFolder string, fileMapping map[string]Fi
 			continue
 		}
 
-		fmt.Printf("Moved %s to %s\n", sourceFilePath, destinationPath)
+		copiedFiles++
+		fmt.Printf("Create: %s\n", destinationPath)
 	}
+	return copiedFiles
 }
 
 type closefn func() error
@@ -262,13 +297,8 @@ func getSource(sourcePath string) (fs.FS, closefn, error) {
 }
 
 func main() {
-	// Get the arguments
-	if len(os.Args) != 3 {
-		fmt.Println("Usage: go run extract.go <extracted_folder> <destination_folder>")
-		os.Exit(1)
-	}
-	sourcePath := os.Args[1]
-	destinationFolder := os.Args[2]
+	// get the command-line arguments
+	sourcePath, destinationFolder := getArguments()
 
 	// get the source filesystem
 	source, close, err := getSource(sourcePath)
@@ -298,8 +328,12 @@ func main() {
 	}
 
 	// copy the files to the destination folder
-	copyFiles(source, destinationFolder, fileMapping)
+	n := copyFiles(source, destinationFolder, fileMapping)
 
 	// this is the end
-	fmt.Println("Déplacement des fichiers terminé.")
+	if n == 0 {
+		fmt.Printf("No files copied.\n")
+	} else {
+		fmt.Printf("Copied %d files to %s\n", n, destinationFolder)
+	}
 }
